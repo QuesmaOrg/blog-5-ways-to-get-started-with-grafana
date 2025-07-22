@@ -24,6 +24,21 @@ class Scenario:
     def run(self, base_dir: Path, port: int = 3000) -> None:
         """Execute this scenario."""
         raise NotImplementedError
+    
+    def _ask_show_logs(self) -> bool:
+        """Ask user if they want to see full Docker logs."""
+        return questionary.confirm("Show full Docker logs?", default=True).ask()
+    
+    def _show_ready_message(self, port: int) -> None:
+        """Display the setup complete message."""
+        print("\n" + "-"*40)
+        print(f"Ready at http://localhost:{port} (admin/admin)")
+        print("Press Ctrl+C to stop")
+        print("-"*40)
+    
+    def _ask_open_browser(self, port: int) -> bool:
+        """Ask user if they want to open browser."""
+        return questionary.confirm(f"Open in browser?", default=True).ask()
 
 
 class StandaloneGrafana(Scenario):
@@ -35,13 +50,19 @@ class StandaloneGrafana(Scenario):
         )
     
     def run(self, base_dir: Path, port: int = 3000) -> None:
-        print(f"\n→ Starting {self.name}...")
-        print(f"Access at: http://localhost:{port} (admin/admin)")
+        cmd_str = f"docker run -i -t --rm -p {port}:3000 grafana/grafana:12.0.2"
+        print(f"\n→ Starting {self.name}... ({cmd_str})")
+        
+        show_logs = self._ask_show_logs()
+        self._show_ready_message(port)
+        
+        if self._ask_open_browser(port):
+            webbrowser.open(f"http://localhost:{port}")
         
         subprocess.run([
             "docker", "run", "-i", "-t", "--rm", "-p", f"{port}:3000",
             "grafana/grafana:12.0.2"
-        ], check=True)
+        ], check=True, capture_output=not show_logs, text=True)
 
 
 class ComposeBased(Scenario):
@@ -53,11 +74,19 @@ class ComposeBased(Scenario):
             print(f"Directory '{self.id}' not found")
             sys.exit(1)
         
-        print(f"\n→ Starting {self.name}...")
-        print(f"Access at: http://localhost:{port} (admin/admin)")
+        cmd_str = f"cd {self.id} && docker-compose up"
+        print(f"\n→ Starting {self.name}... ({cmd_str})")
         
         if port != 3000:
-            print(f"Note: Using port {port} instead of default 3000")
+            print(f"Using port {port} instead of default 3000")
+        
+        show_logs = self._ask_show_logs()
+        self._show_ready_message(port)
+        
+        if self._ask_open_browser(port):
+            webbrowser.open(f"http://localhost:{port}")
+        
+        if port != 3000:
             # Create a temporary docker-compose override
             override_content = f"""services:
   grafana:
@@ -69,13 +98,15 @@ class ComposeBased(Scenario):
                 with open(override_file, 'w') as f:
                     f.write(override_content)
                 
-                subprocess.run(["docker-compose", "up"], cwd=scenario_dir, check=True)
+                subprocess.run(["docker-compose", "up"], cwd=scenario_dir, 
+                             check=True, capture_output=not show_logs, text=True)
             finally:
                 # Clean up override file
                 if override_file.exists():
                     override_file.unlink()
         else:
-            subprocess.run(["docker-compose", "up"], cwd=scenario_dir, check=True)
+            subprocess.run(["docker-compose", "up"], cwd=scenario_dir, 
+                         check=True, capture_output=not show_logs, text=True)
 
 
 class PrometheusSetup(ComposeBased):
@@ -125,6 +156,62 @@ def is_port_available(port: int) -> bool:
         return False
 
 
+def check_docker_containers() -> list[str]:
+    """Check for existing Docker containers that might conflict."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return result.stdout.strip().split('\n') if result.stdout.strip() else []
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+
+
+def handle_container_conflicts(existing_containers: list[str]) -> bool:
+    """Handle Docker container conflicts."""
+    conflicting = [name for name in ['grafana', 'prometheus', 'loki', 'tempo'] 
+                   if name in existing_containers]
+    
+    if not conflicting:
+        return True
+    
+    print(f"\nFound existing containers: {', '.join(conflicting)}")
+    
+    choice = questionary.select(
+        "These containers may conflict. How would you like to proceed?",
+        choices=[
+            "Remove conflicting containers (recommended)",
+            "Stop conflicting containers", 
+            "Continue anyway (may fail)",
+            "Exit to handle manually"
+        ]
+    ).ask()
+    
+    if not choice or "Exit" in choice:
+        return False
+    elif "Remove" in choice:
+        for container in conflicting:
+            try:
+                subprocess.run(["docker", "rm", "-f", container], 
+                             capture_output=True, check=True)
+                print(f"Removed container: {container}")
+            except subprocess.CalledProcessError:
+                print(f"Could not remove container: {container}")
+    elif "Stop" in choice:
+        for container in conflicting:
+            try:
+                subprocess.run(["docker", "stop", container], 
+                             capture_output=True, check=True)
+                print(f"Stopped container: {container}")
+            except subprocess.CalledProcessError:
+                print(f"Could not stop container: {container}")
+    
+    return True
+
+
 def find_next_available_port(start_port: int = 3000) -> int:
     """Find the next available port starting from start_port."""
     port = start_port
@@ -139,7 +226,7 @@ def handle_port_conflict(port: int = 3000) -> int:
     """Handle port conflicts with user-friendly options."""
     next_port = find_next_available_port(port + 1)
     
-    print(f"Port {port} is already in use.")
+    print(f"\nPort {port} is already in use")
     
     choice = questionary.select(
         "How would you like to proceed?",
@@ -217,8 +304,7 @@ def select_scenario() -> Scenario | None:
     """Display scenario selection menu and return choice."""
     scenarios = get_scenarios()
     
-    print("\nGrafana Setup Wizard")
-    print("Choose a scenario:")
+    print("Grafana Setup Wizard - Choose a scenario:")
     
     choices = [f"{s.id} · {s.name} – {s.description}" for s in scenarios]
     
@@ -270,12 +356,20 @@ def main() -> None:
     
     print(f"✓ {docker_version}")
     
+    # Check for container conflicts
+    existing_containers = check_docker_containers()
+    if not handle_container_conflicts(existing_containers):
+        print("Exiting...")
+        return
+    
     # Check port availability
     port = 3000
     if not is_port_available(port):
         port = handle_port_conflict(port)
     else:
         print(f"✓ Port {port} available")
+    
+    print()
     
     scenario = select_scenario()
     if scenario:
