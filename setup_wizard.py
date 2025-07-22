@@ -5,6 +5,7 @@
 # ///
 
 import os
+import socket
 import subprocess
 import sys
 import webbrowser
@@ -20,7 +21,7 @@ class Scenario:
     name: str
     description: str
     
-    def run(self, base_dir: Path) -> None:
+    def run(self, base_dir: Path, port: int = 3000) -> None:
         """Execute this scenario."""
         raise NotImplementedError
 
@@ -33,12 +34,12 @@ class StandaloneGrafana(Scenario):
             description="Vanilla Grafana instance"
         )
     
-    def run(self, base_dir: Path) -> None:
+    def run(self, base_dir: Path, port: int = 3000) -> None:
         print(f"\n→ Starting {self.name}...")
-        print("Access at: http://localhost:3000 (admin/admin)")
+        print(f"Access at: http://localhost:{port} (admin/admin)")
         
         subprocess.run([
-            "docker", "run", "-i", "-t", "--rm", "-p", "3000:3000",
+            "docker", "run", "-i", "-t", "--rm", "-p", f"{port}:3000",
             "grafana/grafana:12.0.2"
         ], check=True)
 
@@ -46,16 +47,35 @@ class StandaloneGrafana(Scenario):
 class ComposeBased(Scenario):
     """Base class for docker-compose based scenarios."""
     
-    def run(self, base_dir: Path) -> None:
+    def run(self, base_dir: Path, port: int = 3000) -> None:
         scenario_dir = base_dir / self.id
         if not scenario_dir.exists():
             print(f"Directory '{self.id}' not found")
             sys.exit(1)
         
         print(f"\n→ Starting {self.name}...")
-        print("Access at: http://localhost:3000 (admin/admin)")
+        print(f"Access at: http://localhost:{port} (admin/admin)")
         
-        subprocess.run(["docker-compose", "up"], cwd=scenario_dir, check=True)
+        if port != 3000:
+            print(f"Note: Using port {port} instead of default 3000")
+            # Create a temporary docker-compose override
+            override_content = f"""services:
+  grafana:
+    ports:
+      - "{port}:3000"
+"""
+            override_file = scenario_dir / "docker-compose.override.yml"
+            try:
+                with open(override_file, 'w') as f:
+                    f.write(override_content)
+                
+                subprocess.run(["docker-compose", "up"], cwd=scenario_dir, check=True)
+            finally:
+                # Clean up override file
+                if override_file.exists():
+                    override_file.unlink()
+        else:
+            subprocess.run(["docker-compose", "up"], cwd=scenario_dir, check=True)
 
 
 class PrometheusSetup(ComposeBased):
@@ -92,6 +112,64 @@ class PyroscopeSetup(ComposeBased):
             name="Grafana + Pyroscope", 
             description="Continuous profiling"
         )
+
+
+def is_port_available(port: int) -> bool:
+    """Check if a port is available."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1)
+            result = sock.connect_ex(('localhost', port))
+            return result != 0
+    except socket.error:
+        return False
+
+
+def find_next_available_port(start_port: int = 3000) -> int:
+    """Find the next available port starting from start_port."""
+    port = start_port
+    while port < 65535:
+        if is_port_available(port):
+            return port
+        port += 1
+    raise RuntimeError("No available ports found")
+
+
+def handle_port_conflict(port: int = 3000) -> int:
+    """Handle port conflicts with user-friendly options."""
+    next_port = find_next_available_port(port + 1)
+    
+    print(f"Port {port} is already in use.")
+    
+    choice = questionary.select(
+        "How would you like to proceed?",
+        choices=[
+            f"Use port {next_port} (recommended)",
+            "Choose custom port",
+            "Exit to handle manually"
+        ]
+    ).ask()
+    
+    if not choice or "Exit" in choice:
+        sys.exit(0)
+    elif "custom port" in choice:
+        while True:
+            custom_port = questionary.text("Enter port number:").ask()
+            if not custom_port:
+                sys.exit(0)
+            try:
+                port_num = int(custom_port)
+                if 1024 <= port_num <= 65535:
+                    if is_port_available(port_num):
+                        return port_num
+                    else:
+                        print(f"Port {port_num} is also in use. Please try another.")
+                else:
+                    print("Port must be between 1024 and 65535.")
+            except ValueError:
+                print("Please enter a valid port number.")
+    else:
+        return next_port
 
 
 def check_docker() -> tuple[bool, str | None]:
@@ -153,12 +231,12 @@ def select_scenario() -> Scenario | None:
     return next(s for s in scenarios if s.id == scenario_id)
 
 
-def run_scenario(scenario: Scenario) -> None:
+def run_scenario(scenario: Scenario, port: int) -> None:
     """Execute the selected scenario with proper error handling."""
     base_dir = Path(__file__).parent
     
     try:
-        scenario.run(base_dir)
+        scenario.run(base_dir, port)
     except subprocess.CalledProcessError as e:
         print(f"Error: {e}")
         sys.exit(1)
@@ -170,6 +248,12 @@ def run_scenario(scenario: Scenario) -> None:
             try:
                 subprocess.run(["docker-compose", "down"], cwd=scenario_dir)
                 print("Services stopped")
+                
+                # Clean up any override file
+                override_file = scenario_dir / "docker-compose.override.yml"
+                if override_file.exists():
+                    override_file.unlink()
+                    
             except subprocess.CalledProcessError:
                 print("Some services may still be running")
         
@@ -186,9 +270,16 @@ def main() -> None:
     
     print(f"✓ {docker_version}")
     
+    # Check port availability
+    port = 3000
+    if not is_port_available(port):
+        port = handle_port_conflict(port)
+    else:
+        print(f"✓ Port {port} available")
+    
     scenario = select_scenario()
     if scenario:
-        run_scenario(scenario)
+        run_scenario(scenario, port)
     else:
         print("No scenario selected")
 
