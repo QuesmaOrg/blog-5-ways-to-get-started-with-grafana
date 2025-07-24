@@ -13,6 +13,32 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import questionary
+from questionary import Style
+
+
+# ANSI color codes for minimal, elegant styling
+class Colors:
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    GRAY = '\033[90m'
+    YELLOW = '\033[93m'
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+
+
+# Custom style for questionary to match our theme
+custom_style = Style([
+    ('qmark', 'fg:#f59e0b'),        # question mark - yellowish
+    ('question', ''),               # question text
+    ('answer', 'fg:#f59e0b bold'),  # submitted answer - yellowish
+    ('pointer', 'fg:#f59e0b bold'), # pointer in select - yellowish
+    ('highlighted', 'fg:#fbbf24'),  # highlighted choice - lighter yellow
+    ('selected', 'fg:#f59e0b'),     # selected item - yellowish
+    ('separator', 'fg:#6c6c6c'),    # separator
+    ('instruction', 'fg:#858585'),  # instructions
+    ('text', ''),                   # plain text
+    ('disabled', 'fg:#858585'),     # disabled choices
+])
 
 
 @dataclass
@@ -27,18 +53,18 @@ class Scenario:
     
     def _ask_show_logs(self) -> bool:
         """Ask user if they want to see full Docker logs."""
-        return questionary.confirm("Show full Docker logs?", default=True).ask()
+        return questionary.confirm("Show full Docker logs?", default=True, style=custom_style).ask()
     
     def _show_ready_message(self, port: int) -> None:
         """Display the setup complete message."""
-        print("\n" + "-"*40)
-        print(f"Ready at http://localhost:{port} (admin/admin)")
-        print("Press Ctrl+C to stop")
-        print("-"*40)
+        print(f"\n{Colors.GREEN}✓{Colors.RESET} Grafana is ready")
+        print(f"\n  {Colors.CYAN}http://localhost:{port}{Colors.RESET}")
+        print(f"  {Colors.GRAY}admin / admin{Colors.RESET}")
+        print(f"\n{Colors.GRAY}Press Ctrl+C to stop{Colors.RESET}")
     
     def _ask_open_browser(self, port: int) -> bool:
         """Ask user if they want to open browser."""
-        return questionary.confirm(f"Open in browser?", default=True).ask()
+        return questionary.confirm("Open in browser?", default=True, style=custom_style).ask()
 
 
 class StandaloneGrafana(Scenario):
@@ -51,13 +77,16 @@ class StandaloneGrafana(Scenario):
     
     def run(self, base_dir: Path, port: int = 3000) -> None:
         cmd_str = f"docker run -i -t --rm -p {port}:3000 grafana/grafana:12.0.2"
-        print(f"\n→ Starting {self.name}... ({cmd_str})")
+        print(f"\n{Colors.GRAY}→ Starting {self.name}...{Colors.RESET}")
+        print(f"  {Colors.GRAY}{cmd_str}{Colors.RESET}")
         
+        print()
         show_logs = self._ask_show_logs()
         self._show_ready_message(port)
         
         if self._ask_open_browser(port):
             webbrowser.open(f"http://localhost:{port}")
+            print()
         
         subprocess.run([
             "docker", "run", "-i", "-t", "--rm", "-p", f"{port}:3000",
@@ -71,20 +100,23 @@ class ComposeBased(Scenario):
     def run(self, base_dir: Path, port: int = 3000) -> None:
         scenario_dir = base_dir / self.id
         if not scenario_dir.exists():
-            print(f"Directory '{self.id}' not found")
+            print(f"{Colors.YELLOW}Directory '{self.id}' not found{Colors.RESET}")
             sys.exit(1)
         
         cmd_str = f"cd {self.id} && docker-compose up"
-        print(f"\n→ Starting {self.name}... ({cmd_str})")
+        print(f"\n{Colors.GRAY}→ Starting {self.name}...{Colors.RESET}")
+        print(f"  {Colors.GRAY}{cmd_str}{Colors.RESET}")
         
         if port != 3000:
-            print(f"Using port {port} instead of default 3000")
+            print(f"\n  {Colors.YELLOW}Using port {Colors.CYAN}{port}{Colors.YELLOW} instead of default 3000{Colors.RESET}")
         
+        print()
         show_logs = self._ask_show_logs()
         self._show_ready_message(port)
         
         if self._ask_open_browser(port):
             webbrowser.open(f"http://localhost:{port}")
+            print()
         
         if port != 3000:
             # Create a temporary docker-compose override
@@ -178,7 +210,7 @@ def handle_container_conflicts(existing_containers: list[str]) -> bool:
     if not conflicting:
         return True
     
-    print(f"\nFound existing containers: {', '.join(conflicting)}")
+    print(f"\n{Colors.YELLOW}Found existing containers:{Colors.RESET} {', '.join(conflicting)}")
     
     choice = questionary.select(
         "These containers may conflict. How would you like to proceed?",
@@ -187,7 +219,8 @@ def handle_container_conflicts(existing_containers: list[str]) -> bool:
             "Stop conflicting containers", 
             "Continue anyway (may fail)",
             "Exit to handle manually"
-        ]
+        ],
+        style=custom_style
     ).ask()
     
     if not choice or "Exit" in choice:
@@ -197,17 +230,17 @@ def handle_container_conflicts(existing_containers: list[str]) -> bool:
             try:
                 subprocess.run(["docker", "rm", "-f", container], 
                              capture_output=True, check=True)
-                print(f"Removed container: {container}")
+                print(f"  {Colors.GREEN}✓{Colors.RESET} Removed container: {Colors.GRAY}{container}{Colors.RESET}")
             except subprocess.CalledProcessError:
-                print(f"Could not remove container: {container}")
+                print(f"  {Colors.YELLOW}!{Colors.RESET} Could not remove container: {Colors.GRAY}{container}{Colors.RESET}")
     elif "Stop" in choice:
         for container in conflicting:
             try:
                 subprocess.run(["docker", "stop", container], 
                              capture_output=True, check=True)
-                print(f"Stopped container: {container}")
+                print(f"  {Colors.GREEN}✓{Colors.RESET} Stopped container: {Colors.GRAY}{container}{Colors.RESET}")
             except subprocess.CalledProcessError:
-                print(f"Could not stop container: {container}")
+                print(f"  {Colors.YELLOW}!{Colors.RESET} Could not stop container: {Colors.GRAY}{container}{Colors.RESET}")
     
     return True
 
@@ -226,7 +259,7 @@ def handle_port_conflict(port: int = 3000) -> int:
     """Handle port conflicts with user-friendly options."""
     next_port = find_next_available_port(port + 1)
     
-    print(f"\nPort {port} is already in use")
+    print(f"\n{Colors.YELLOW}Port {Colors.CYAN}{port}{Colors.YELLOW} is already in use{Colors.RESET}")
     
     choice = questionary.select(
         "How would you like to proceed?",
@@ -234,14 +267,16 @@ def handle_port_conflict(port: int = 3000) -> int:
             f"Use port {next_port} (recommended)",
             "Choose custom port",
             "Exit to handle manually"
-        ]
+        ],
+        style=custom_style
     ).ask()
     
     if not choice or "Exit" in choice:
         sys.exit(0)
     elif "custom port" in choice:
         while True:
-            custom_port = questionary.text("Enter port number:").ask()
+            print()
+            custom_port = questionary.text("Enter port number:", style=custom_style).ask()
             if not custom_port:
                 sys.exit(0)
             try:
@@ -250,11 +285,11 @@ def handle_port_conflict(port: int = 3000) -> int:
                     if is_port_available(port_num):
                         return port_num
                     else:
-                        print(f"Port {port_num} is also in use. Please try another.")
+                        print(f"  {Colors.YELLOW}Port {Colors.CYAN}{port_num}{Colors.YELLOW} is also in use. Please try another.{Colors.RESET}")
                 else:
-                    print("Port must be between 1024 and 65535.")
+                    print(f"  {Colors.YELLOW}Port must be between 1024 and 65535.{Colors.RESET}")
             except ValueError:
-                print("Please enter a valid port number.")
+                print(f"  {Colors.YELLOW}Please enter a valid port number.{Colors.RESET}")
     else:
         return next_port
 
@@ -280,7 +315,8 @@ def handle_missing_docker() -> None:
         choices=[
             "Open installation page",
             "Exit"
-        ]
+        ],
+        style=custom_style
     ).ask()
     
     if choice == "Open installation page":
@@ -304,11 +340,12 @@ def select_scenario() -> Scenario | None:
     """Display scenario selection menu and return choice."""
     scenarios = get_scenarios()
     
-    print("Grafana Setup Wizard - Choose a scenario:")
+    print()
     
     choices = [f"{s.id.split('_')[0]} · {s.name} – {s.description}" for s in scenarios]
     
-    selected = questionary.select("Select scenario:", choices=choices).ask()
+    selected = questionary.select("Select scenario:", choices=choices, style=custom_style).ask()
+    print()
     
     if not selected:
         return None
@@ -324,16 +361,16 @@ def run_scenario(scenario: Scenario, port: int) -> None:
     try:
         scenario.run(base_dir, port)
     except subprocess.CalledProcessError as e:
-        print(f"Error: {e}")
+        print(f"\n{Colors.YELLOW}Error:{Colors.RESET} {e}")
         sys.exit(1)
     except KeyboardInterrupt:
-        print(f"\n→ Stopping {scenario.name}...")
+        print(f"\n{Colors.GRAY}→ Stopping {scenario.name}...{Colors.RESET}")
         
         if scenario.id != "01_standalone_grafana":
             scenario_dir = base_dir / scenario.id
             try:
                 subprocess.run(["docker-compose", "down"], cwd=scenario_dir)
-                print("Services stopped")
+                print(f"{Colors.GREEN}✓{Colors.RESET} Services stopped")
                 
                 # Clean up any override file
                 override_file = scenario_dir / "docker-compose.override.yml"
@@ -341,25 +378,32 @@ def run_scenario(scenario: Scenario, port: int) -> None:
                     override_file.unlink()
                     
             except subprocess.CalledProcessError:
-                print("Some services may still be running")
+                print(f"{Colors.YELLOW}!{Colors.RESET} Some services may still be running")
         
         sys.exit(0)
 
 
 def main() -> None:
     """Main function."""
+    print(f"\n{Colors.BOLD}Grafana Setup Wizard{Colors.RESET}")
+    print(f"{Colors.GRAY}Interactive setup for Grafana scenarios{Colors.RESET}\n")
+    
     docker_available, docker_version = check_docker()
     
     if not docker_available:
         handle_missing_docker()
         return
     
-    print(f"✓ {docker_version}")
+    version_parts = docker_version.split(' ')
+    if len(version_parts) >= 3:
+        print(f"{Colors.GREEN}✓{Colors.RESET} Docker {Colors.CYAN}{version_parts[2].rstrip(',')}{Colors.RESET}")
+    else:
+        print(f"{Colors.GREEN}✓{Colors.RESET} {docker_version}")
     
     # Check for container conflicts
     existing_containers = check_docker_containers()
     if not handle_container_conflicts(existing_containers):
-        print("Exiting...")
+        print(f"\n{Colors.GRAY}Exiting...{Colors.RESET}")
         return
     
     # Check port availability
@@ -367,15 +411,13 @@ def main() -> None:
     if not is_port_available(port):
         port = handle_port_conflict(port)
     else:
-        print(f"✓ Port {port} available")
-    
-    print()
+        print(f"{Colors.GREEN}✓{Colors.RESET} Port {Colors.CYAN}{port}{Colors.RESET} available")
     
     scenario = select_scenario()
     if scenario:
         run_scenario(scenario, port)
     else:
-        print("No scenario selected")
+        print(f"\n{Colors.GRAY}No scenario selected{Colors.RESET}")
 
 
 if __name__ == "__main__":
