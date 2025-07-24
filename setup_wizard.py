@@ -44,7 +44,7 @@ class Scenario:
 class StandaloneGrafana(Scenario):
     def __init__(self):
         super().__init__(
-            id="01", 
+            id="01_standalone_grafana", 
             name="Standalone Grafana", 
             description="Vanilla Grafana instance"
         )
@@ -112,7 +112,7 @@ class ComposeBased(Scenario):
 class PrometheusSetup(ComposeBased):
     def __init__(self):
         super().__init__(
-            id="02", 
+            id="02_metrics_with_prometheus", 
             name="Grafana + Prometheus", 
             description="Basic metrics collection"
         )
@@ -121,7 +121,7 @@ class PrometheusSetup(ComposeBased):
 class LokiSetup(ComposeBased):
     def __init__(self):
         super().__init__(
-            id="03", 
+            id="03_logs_with_loki", 
             name="Grafana + Loki", 
             description="Log aggregation and exploration"
         )
@@ -130,7 +130,7 @@ class LokiSetup(ComposeBased):
 class TempoSetup(ComposeBased):
     def __init__(self):
         super().__init__(
-            id="04", 
+            id="04_traces_with_tempo", 
             name="Grafana + Tempo", 
             description="Distributed tracing"
         )
@@ -139,7 +139,7 @@ class TempoSetup(ComposeBased):
 class PyroscopeSetup(ComposeBased):
     def __init__(self):
         super().__init__(
-            id="05", 
+            id="05_profiling_with_pyroscope", 
             name="Grafana + Pyroscope", 
             description="Continuous profiling"
         )
@@ -306,15 +306,15 @@ def select_scenario() -> Scenario | None:
     
     print("Grafana Setup Wizard - Choose a scenario:")
     
-    choices = [f"{s.id} · {s.name} – {s.description}" for s in scenarios]
+    choices = [f"{s.id.split('_')[0]} · {s.name} – {s.description}" for s in scenarios]
     
     selected = questionary.select("Select scenario:", choices=choices).ask()
     
     if not selected:
         return None
     
-    scenario_id = selected[:2]
-    return next(s for s in scenarios if s.id == scenario_id)
+    scenario_num = selected[:2]
+    return next(s for s in scenarios if s.id.startswith(scenario_num))
 
 
 def run_scenario(scenario: Scenario, port: int) -> None:
@@ -329,7 +329,7 @@ def run_scenario(scenario: Scenario, port: int) -> None:
     except KeyboardInterrupt:
         print(f"\n→ Stopping {scenario.name}...")
         
-        if scenario.id != "01":
+        if scenario.id != "01_standalone_grafana":
             scenario_dir = base_dir / scenario.id
             try:
                 subprocess.run(["docker-compose", "down"], cwd=scenario_dir)
