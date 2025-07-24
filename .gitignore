@@ -1,3 +1,5 @@
 04_traces_with_tempo/tempo/data
 .idea
 CLAUDE.md
+__pycache__
+.DS_Store
