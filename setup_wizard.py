@@ -1,3 +1,4 @@
+#!/usr/bin/env uv run
 # /// script
 # dependencies = [
 #     "questionary==2.1.0",
